@@ -1,15 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 
 export default function App() {
-  // === Config you can tweak ===
-  // Put your own number (e.g. "+15551234567") to open your thread directly.
-  // Leave empty to let Android/iOS pick the recipient (we fall back to Share sheet).
-  const SMS_TO = ''
+  // === Config ===
+  const SMS_TO = '' // e.g. "+15551234567" to open your thread directly
 
   // STATE
-  const [level, setLevel] = useStickyState<number>(35, 'gf_level') // 0–100
-  const [cups, setCups] = useStickyState<number>(1, 'gf_cups')     // 0–4+
+  const [level, setLevel] = useStickyState<number>(35, 'gf_level')
+  const [cups, setCups] = useStickyState<number>(1, 'gf_cups')
   const [name, setName] = useStickyState<string>('Dad', 'gf_name')
   const [dark, setDark] = useStickyState<boolean>(false, 'gf_dark')
   const [announce, setAnnounce] = useState('')
@@ -25,11 +23,15 @@ export default function App() {
   }
   useEffect(() => () => { if (toastTimer.current) window.clearTimeout(toastTimer.current) }, [])
 
+  // Motion preference
+  const prefersReduced = useReducedMotion()
+
   // PWA install state
   const [installPrompt, setInstallPrompt] = useState<any>(null)
   const [installed, setInstalled] = useState(
     typeof window !== 'undefined' &&
-    (window.matchMedia?.('(display-mode: standalone)').matches || (navigator as any).standalone === true)
+      (window.matchMedia?.('(display-mode: standalone)').matches ||
+        (navigator as any).standalone === true)
   )
   useEffect(() => {
     const onBeforeInstall = (e: any) => { e.preventDefault(); setInstallPrompt(e) }
@@ -45,17 +47,20 @@ export default function App() {
     try { await installPrompt?.prompt(); await installPrompt?.userChoice; setInstallPrompt(null) } catch {}
   }
 
-  // INIT FROM URL
+  // INIT FROM URL (with sanitize)
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search)
       const l = params.get('level')
       const c = params.get('cups')
       const n = params.get('name')
+      const source = params.get('source') // for inbound “telemetry”
       if (l !== null && !Number.isNaN(parseInt(l))) setLevel(clamp(parseInt(l), 0, 100))
       if (c !== null && !Number.isNaN(parseInt(c))) setCups(clamp(parseInt(c), 0, 4))
-      if (n !== null) setName(n)
+      if (n !== null) setName(cleanName(n))
+      if (source) incrCounter(`gf_stat_in_${source}`)
     } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // SYNC URL
@@ -70,6 +75,13 @@ export default function App() {
       window.history.replaceState({}, '', url.toString())
     } catch {}
   }, [level, cups, name])
+
+  // Theme color meta (status bar)
+  const tone = useMemo(() => toneFor(level, dark), [level, dark])
+  useEffect(() => {
+    const m = document.querySelector('meta[name="theme-color"]') as HTMLMetaElement | null
+    if (m) m.setAttribute('content', dark ? '#18181b' : tone.track)
+  }, [tone, dark])
 
   // ACCESSIBLE ANNOUNCEMENTS
   useEffect(() => {
@@ -94,7 +106,6 @@ export default function App() {
 
   // DERIVED UI
   const face = useMemo(() => faceFor(level), [level])
-  const tone = useMemo(() => toneFor(level, dark), [level, dark])
   const descriptor = useMemo(() => descriptorFor(level), [level])
   const recommendation = useMemo(() => recommendationFor(level, cups), [level, cups])
   const bgGradient = `bg-gradient-to-br ${tone.bgFrom} ${tone.bgTo}`
@@ -118,6 +129,7 @@ export default function App() {
   }
 
   const shareNative = async () => {
+    incrCounter('gf_stat_share')
     const url = shareUrl()
     const title = 'Grump Factor'
     const text = `Where’s your grump factor today, ${name || 'Dad'}? Slide to rate: ${url}`
@@ -128,9 +140,7 @@ export default function App() {
         // @ts-ignore
         await navigator.share({ title, text, url })
         showToast('Shared')
-      } catch {
-        // user cancelled; ignore
-      }
+      } catch { /* cancelled */ }
     } else {
       await handleCopy(url)
     }
@@ -155,28 +165,35 @@ export default function App() {
     () => buildMessages({ level, cups, name, url: shareUrl() }),
     [level, cups, name]
   )
-
-  // Auto-pick SMS tone by current level
   const smsTemplate = useMemo(() => {
     if (level <= 40) return messageTemplates.playful
     if (level <= 80) return messageTemplates.straight
     return messageTemplates.emoji
   }, [level, messageTemplates])
 
-  // Robust “Text Marcus”
   const textMarcus = async () => {
+    incrCounter('gf_stat_text')
     const recipient = SMS_TO ? encodeURIComponent(SMS_TO) : ''
     const smsUrl = `sms:${recipient}?body=${encodeURIComponent(smsTemplate)}`
     if (!SMS_TO && (navigator as any).share) {
       try { await (navigator as any).share({ text: smsTemplate }); showToast('Shared'); return }
-      catch { /* fall through to SMS */ }
+      catch { /* fall through */ }
     }
     window.location.href = smsUrl
   }
 
-  // Slider bubble pos
+  // Haptics
+  const bump = (ms = 10) => { try { navigator.vibrate?.(ms) } catch {} }
+
+  // Slider bubble
   const pct = Math.max(0, Math.min(100, level))
   const bubbleLeft = `calc(${pct}% - 16px)`
+
+  // Descriptor id for aria-describedby
+  const descId = 'gf-desc'
+
+  // Presets
+  const applyPreset = (p: 'am'|'pm') => { setCups(p === 'am' ? 1 : 3); bump(8) }
 
   return (
     <div className={dark ? 'dark' : ''}>
@@ -200,18 +217,16 @@ export default function App() {
                   {dark ? 'Light' : 'Dark'}
                 </button>
 
-                {/* Bouncy "Now:" pill */}
                 <motion.span
                   layout
                   key={Math.round(level)}
                   className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${tone.pillBg} ${tone.pillText} border ${tone.pillBorder}`}
-                  animate={{ scale: [1, 1.05, 1] }}
-                  transition={{ duration: 0.25 }}
+                  animate={prefersReduced ? undefined : { scale: [1, 1.05, 1] }}
+                  transition={prefersReduced ? undefined : { duration: 0.25 }}
                 >
                   Now: {Math.round(level)}/100
                 </motion.span>
 
-                {/* Installed badge */}
                 {installed && (
                   <span className="inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-semibold border border-emerald-300/60 bg-emerald-100/70 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200 dark:border-emerald-700/60">
                     Installed
@@ -221,16 +236,30 @@ export default function App() {
             </header>
 
             <main className="mt-6 md:mt-8 grid gap-6">
-              {/* Name + Coffee */}
+              {/* Name + Coffee + Presets */}
               <div className="flex flex-col md:flex-row md:items-end gap-4">
                 <div className="grow">
                   <label className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Who are we checking on?</label>
                   <input
                     value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    onChange={(e) => setName(cleanName(e.target.value))}
                     placeholder="Dad"
                     className="mt-1 w-full rounded-xl border border-gray-300 dark:border-white/20 bg-white/70 dark:bg-zinc-800 px-3 py-2 outline-none focus:ring-2 focus:ring-black/10 dark:focus:ring-white/20"
                   />
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      className="rounded-lg px-2.5 py-1 text-xs font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800"
+                      onClick={() => applyPreset('am')}
+                    >
+                      Morning
+                    </button>
+                    <button
+                      className="rounded-lg px-2.5 py-1 text-xs font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800"
+                      onClick={() => applyPreset('pm')}
+                    >
+                      Evening
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <label className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Coffee level</label>
@@ -238,7 +267,7 @@ export default function App() {
                     {Array.from({ length: 5 }).map((_, i) => (
                       <button
                         key={i}
-                        onClick={() => setCups(i)}
+                        onClick={() => { setCups(i); bump(8) }}
                         className={i <= cups
                           ? 'text-2xl leading-none rounded-xl px-2 py-1 border bg-amber-50 dark:bg-amber-900/30 border-amber-300 dark:border-amber-600'
                           : 'text-2xl leading-none rounded-xl px-2 py-1 border bg-transparent border-transparent'}
@@ -252,16 +281,16 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Big face + animated descriptor */}
+              {/* Face + descriptor */}
               <div className="flex items-center gap-4">
                 <AnimatePresence mode="popLayout" initial={false}>
                   <motion.div
                     key={face.emoji}
                     className="text-[64px] md:text-[80px] leading-none select-none"
                     aria-hidden
-                    initial={{ scale: 0.9, rotate: -5, opacity: 0 }}
-                    animate={{ scale: 1, rotate: 0, opacity: 1 }}
-                    exit={{ scale: 0.9, rotate: 5, opacity: 0 }}
+                    initial={prefersReduced ? undefined : { scale: 0.9, rotate: -5, opacity: 0 }}
+                    animate={prefersReduced ? undefined : { scale: 1, rotate: 0, opacity: 1 }}
+                    exit={prefersReduced ? undefined : { scale: 0.9, rotate: 5, opacity: 0 }}
                     transition={{ type: 'spring', stiffness: 300, damping: 20 }}
                   >
                     {face.emoji}
@@ -271,25 +300,25 @@ export default function App() {
                 <AnimatePresence mode="popLayout" initial={false}>
                   <motion.div
                     key={descriptor.title}
-                    initial={{ y: 6, opacity: 0 }}
-                    animate={{ y: 0, opacity: 1 }}
-                    exit={{ y: -6, opacity: 0 }}
+                    initial={prefersReduced ? undefined : { y: 6, opacity: 0 }}
+                    animate={prefersReduced ? undefined : { y: 0, opacity: 1 }}
+                    exit={prefersReduced ? undefined : { y: -6, opacity: 0 }}
                     transition={{ type: 'spring', stiffness: 400, damping: 28, mass: 0.6 }}
                   >
                     <div className={`text-xl md:text-2xl font-bold ${tone.text}`}>{descriptor.title}</div>
-                    <div className="text-gray-600 dark:text-gray-300 text-sm md:text-base">{descriptor.subtitle}</div>
+                    <div id={descId} className="text-gray-600 dark:text-gray-300 text-sm md:text-base">{descriptor.subtitle}</div>
                   </motion.div>
                 </AnimatePresence>
               </div>
 
-              {/* Slider + floating bubble */}
+              {/* Slider + bubble */}
               <div className="pt-2">
                 <div className="relative h-0">
                   <motion.div
                     className="absolute -top-7 w-10 text-center text-xs font-semibold pointer-events-none select-none"
                     style={{ left: bubbleLeft }}
-                    animate={{ y: [0, -2, 0] }}
-                    transition={{ duration: 0.35 }}
+                    animate={prefersReduced ? undefined : { y: [0, -2, 0] }}
+                    transition={prefersReduced ? undefined : { duration: 0.35 }}
                   >
                     <span className="inline-block px-2 py-1 rounded-lg bg-white/90 dark:bg-zinc-800/90 border border-black/10 dark:border-white/10">
                       {Math.round(level)}
@@ -306,11 +335,12 @@ export default function App() {
                   max={100}
                   step={1}
                   value={level}
-                  onChange={(e) => setLevel(Number(e.target.value))}
+                  onChange={(e) => { setLevel(Number(e.target.value)); bump(6) }}
                   aria-valuemin={0}
                   aria-valuemax={100}
                   aria-valuenow={level}
                   aria-valuetext={`${Math.round(level)} out of 100`}
+                  aria-describedby={descId}
                   className="w-full appearance-none h-3 rounded-full outline-none"
                   style={{ background: `linear-gradient(to right, ${tone.track} ${level}%, ${dark ? '#27272a' : '#e5e7eb'} ${level}%)` }}
                 />
@@ -323,7 +353,7 @@ export default function App() {
                 {/* Tick marks */}
                 <div className="relative mt-3 h-5">
                   <div className="absolute inset-x-0 top-2 flex justify-between">
-                    {marks.map(m => (
+                    {marks.map((m) => (
                       <div key={m} className={dark ? 'h-3 w-[2px] bg-zinc-600' : 'h-3 w-[2px] bg-gray-300'} />
                     ))}
                   </div>
@@ -337,19 +367,23 @@ export default function App() {
               <div>
                 <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-2">Quick set</p>
                 <div className="grid grid-cols-5 gap-2">
-                  {quickSet.map((val, idx) => (
-                    <motion.button
-                      key={val}
-                      whileTap={{ scale: 0.96 }}
-                      className={`group rounded-2xl border px-3 py-2 text-2xl transition ${valToTone(val).btnBg} ${valToTone(val).btnBorder} hover:shadow-md`}
-                      onClick={() => setLevel(val)}
-                      aria-label={`Set to ${labels[idx]}`}
-                      title={`Set to ${labels[idx]}`}
-                    >
-                      <span className="block">{faces[idx].emoji}</span>
-                      <span className="block text-[10px] mt-1 text-gray-600 dark:text-gray-300">{labels[idx]}</span>
-                    </motion.button>
-                  ))}
+                  {quickSet.map((val, idx) => {
+                    const pressed = level === val
+                    return (
+                      <motion.button
+                        key={val}
+                        whileTap={prefersReduced ? undefined : { scale: 0.96 }}
+                        className={`group rounded-2xl border px-3 py-2 text-2xl transition ${valToTone(val).btnBg} ${valToTone(val).btnBorder} hover:shadow-md`}
+                        onClick={() => { setLevel(val); bump(8) }}
+                        aria-label={`Set to ${labels[idx]}`}
+                        aria-pressed={pressed}
+                        title={`Set to ${labels[idx]}`}
+                      >
+                        <span className="block">{faces[idx].emoji}</span>
+                        <span className="block text-[10px] mt-1 text-gray-600 dark:text-gray-300">{labels[idx]}</span>
+                      </motion.button>
+                    )
+                  })}
                 </div>
               </div>
 
@@ -466,8 +500,14 @@ export default function App() {
   )
 }
 
-// ===== Helpers =====
+/* ===== Helpers ===== */
+
 function clamp(n: number, min = 0, max = 100) { return Math.min(max, Math.max(min, n)) }
+
+function cleanName(s: string) {
+  // letters, numbers, spaces, . ' -
+  return s.replace(/[^\p{L}\p{N}\s.'-]/gu, '').slice(0, 30)
+}
 
 function useStickyState<T>(initial: T, key: string): [T, (v: T | ((v: T) => T)) => void] {
   const [value, setValue] = useState<T>(() => {
@@ -475,6 +515,14 @@ function useStickyState<T>(initial: T, key: string): [T, (v: T | ((v: T) => T)) 
   })
   useEffect(() => { try { localStorage.setItem(key, JSON.stringify(value)) } catch {} }, [key, value])
   return [value, setValue]
+}
+
+// ultra-light local counters
+function incrCounter(key: string) {
+  try {
+    const v = parseInt(localStorage.getItem(key) || '0')
+    localStorage.setItem(key, String((Number.isNaN(v) ? 0 : v) + 1))
+  } catch {}
 }
 
 const labels = ['happy', 'slightly grumpy', 'grumpy', 'very grumpy', 'extremely grumpy']
@@ -553,4 +601,4 @@ function buildMessages({ level, cups, name, url }: { level: number; cups: number
     straight: `Hey ${who}, where’s your grump factor today (0–100)? Slide and tell me: ${url}`,
     emoji: `Grump factor today? 👉 😄–🙂–😐–😠–😡  Slide: ${url}`,
   } as const
-}
+    }
