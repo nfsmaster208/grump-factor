@@ -2,6 +2,10 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 
 export default function App() {
+  // === Config you can tweak ===
+  // Add your number to pre-address the SMS (e.g., "+15551234567"). Empty = user picks contact.
+  const SMS_TO = ''
+
   // STATE
   const [level, setLevel] = useStickyState<number>(35, 'gf_level') // 0–100
   const [cups, setCups] = useStickyState<number>(1, 'gf_cups') // 0–4+
@@ -10,6 +14,37 @@ export default function App() {
   const [copied, setCopied] = useState<string | null>(null)
   const [announce, setAnnounce] = useState('')
   const sliderRef = useRef<HTMLInputElement | null>(null)
+
+  // PWA install state
+  const [installPrompt, setInstallPrompt] = useState<any>(null)
+  const [installed, setInstalled] = useState(
+    typeof window !== 'undefined' &&
+      (window.matchMedia?.('(display-mode: standalone)').matches ||
+        (navigator as any).standalone === true)
+  )
+
+  // Capture install prompt
+  useEffect(() => {
+    const onBeforeInstall = (e: any) => {
+      e.preventDefault()
+      setInstallPrompt(e)
+    }
+    const onInstalled = () => setInstalled(true)
+    window.addEventListener('beforeinstallprompt', onBeforeInstall)
+    window.addEventListener('appinstalled', onInstalled)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstall)
+      window.removeEventListener('appinstalled', onInstalled)
+    }
+  }, [])
+
+  const triggerInstall = async () => {
+    try {
+      await installPrompt?.prompt()
+      await installPrompt?.userChoice
+      setInstallPrompt(null)
+    } catch {}
+  }
 
   // INIT FROM URL
   useEffect(() => {
@@ -31,6 +66,8 @@ export default function App() {
       url.searchParams.set('level', String(Math.round(level)))
       url.searchParams.set('cups', String(cups))
       url.searchParams.set('name', name || 'Dad')
+      const v = (import.meta as any).env?.VITE_APP_VERSION
+      if (v) url.searchParams.set('v', String(v))
       window.history.replaceState({}, '', url.toString())
     } catch {}
   }, [level, cups, name])
@@ -76,19 +113,17 @@ export default function App() {
   }
 
   const shareUrl = () => {
-  try {
-    const url = new URL(window.location.href)
-    url.searchParams.set('level', String(Math.round(level)))
-    url.searchParams.set('cups', String(cups))
-    url.searchParams.set('name', name || 'Dad')
-
-    const v = (import.meta as any).env?.VITE_APP_VERSION
-    if (v) url.searchParams.set('v', String(v))
-
-    return url.toString()
-  } catch {
-    return ''
-  }
+    try {
+      const url = new URL(window.location.href)
+      url.searchParams.set('level', String(Math.round(level)))
+      url.searchParams.set('cups', String(cups))
+      url.searchParams.set('name', name || 'Dad')
+      const v = (import.meta as any).env?.VITE_APP_VERSION
+      if (v) url.searchParams.set('v', String(v))
+      return url.toString()
+    } catch {
+      return ''
+    }
   }
 
   const shareNative = async () => {
@@ -111,6 +146,17 @@ export default function App() {
     setCups(1)
   }
 
+  const clearAll = () => {
+    try {
+      localStorage.removeItem('gf_level')
+      localStorage.removeItem('gf_cups')
+      localStorage.removeItem('gf_name')
+      localStorage.removeItem('gf_dark')
+    } catch {}
+    setLevel(35); setCups(1); setName('Dad'); setDark(false)
+    setCopied('Reset saved settings'); setTimeout(() => setCopied(null), 1200)
+  }
+
   const marks = [0, 20, 40, 60, 80, 100]
   const quickSet = [10, 30, 50, 70, 90] // midpoint for each face
 
@@ -119,7 +165,23 @@ export default function App() {
     [level, cups, name]
   )
 
-return (
+  // Auto-pick SMS tone by current level
+  const smsTemplate = useMemo(() => {
+    if (level <= 40) return messageTemplates.playful
+    if (level <= 80) return messageTemplates.straight
+    return messageTemplates.emoji
+  }, [level, messageTemplates])
+
+  const smsHref = useMemo(() => {
+    const base = SMS_TO ? `sms:${encodeURIComponent(SMS_TO)}` : 'sms:'
+    return `${base}&body=${encodeURIComponent(smsTemplate)}`
+  }, [smsTemplate, SMS_TO])
+
+  // Slider bubble position
+  const pct = Math.max(0, Math.min(100, level))
+  const bubbleLeft = `calc(${pct}% - 16px)` // ~center a ~32px bubble
+
+  return (
     <div className={dark ? 'dark' : ''}>
       <div className={`min-h-screen ${bgGradient} text-gray-900 dark:text-gray-50 flex items-center justify-center p-6 transition-colors`}>
         <div className="w-full max-w-3xl">
@@ -139,9 +201,17 @@ return (
                 >
                   {dark ? 'Light' : 'Dark'}
                 </button>
-                <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${tone.pillBg} ${tone.pillText} border ${tone.pillBorder}`}>
+
+                {/* Bouncy "Now:" pill */}
+                <motion.span
+                  layout
+                  key={Math.round(level)}
+                  className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${tone.pillBg} ${tone.pillText} border ${tone.pillBorder}`}
+                  animate={{ scale: [1, 1.05, 1] }}
+                  transition={{ duration: 0.25 }}
+                >
                   Now: {Math.round(level)}/100
-                </span>
+                </motion.span>
               </div>
             </header>
 
@@ -175,7 +245,7 @@ return (
                 </div>
               </div>
 
-              {/* Big face + label */}
+              {/* Big face + animated descriptor */}
               <div className="flex items-center gap-4">
                 <AnimatePresence mode="popLayout" initial={false}>
                   <motion.div
@@ -190,14 +260,37 @@ return (
                     {face.emoji}
                   </motion.div>
                 </AnimatePresence>
-                <div>
-                  <div className={`text-xl md:text-2xl font-bold ${tone.text}`}>{descriptor.title}</div>
-                  <div className="text-gray-600 dark:text-gray-300 text-sm md:text-base">{descriptor.subtitle}</div>
-                </div>
+
+                <AnimatePresence mode="popLayout" initial={false}>
+                  <motion.div
+                    key={descriptor.title}
+                    initial={{ y: 6, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    exit={{ y: -6, opacity: 0 }}
+                    transition={{ type: 'spring', stiffness: 400, damping: 28, mass: 0.6 }}
+                  >
+                    <div className={`text-xl md:text-2xl font-bold ${tone.text}`}>{descriptor.title}</div>
+                    <div className="text-gray-600 dark:text-gray-300 text-sm md:text-base">{descriptor.subtitle}</div>
+                  </motion.div>
+                </AnimatePresence>
               </div>
 
-              {/* Slider */}
+              {/* Slider + floating bubble */}
               <div className="pt-2">
+                {/* floating bubble */}
+                <div className="relative h-0">
+                  <motion.div
+                    className="absolute -top-7 w-10 text-center text-xs font-semibold pointer-events-none select-none"
+                    style={{ left: bubbleLeft }}
+                    animate={{ y: [0, -2, 0] }}
+                    transition={{ duration: 0.35 }}
+                  >
+                    <span className="inline-block px-2 py-1 rounded-lg bg-white/90 dark:bg-zinc-800/90 border border-black/10 dark:border-white/10">
+                      {Math.round(level)}
+                    </span>
+                  </motion.div>
+                </div>
+
                 <label htmlFor="grump-slider" className="sr-only">Grump Factor</label>
                 <input
                   id="grump-slider"
@@ -220,10 +313,11 @@ return (
                   #grump-slider:active::-webkit-slider-thumb { cursor: grabbing; }
                   #grump-slider::-moz-range-thumb { width: 28px; height: 28px; border-radius: 9999px; background: white; border: 3px solid ${tone.thumbBorder}; box-shadow: 0 2px 8px rgba(0,0,0,.25); cursor: grab; }
                 `}</style>
+
                 {/* Tick marks */}
                 <div className="relative mt-3 h-5">
                   <div className="absolute inset-x-0 top-2 flex justify-between">
-                    {[0,20,40,60,80,100].map((m) => (
+                    {marks.map((m) => (
                       <div key={m} className={`h-3 w-[2px] ${dark ? 'bg-zinc-600' : 'bg-gray-300'}`} />
                     ))}
                   </div>
@@ -237,17 +331,18 @@ return (
               <div>
                 <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-2">Quick set</p>
                 <div className="grid grid-cols-5 gap-2">
-                  {[10,30,50,70,90].map((val, idx) => (
-                    <button
+                  {quickSet.map((val, idx) => (
+                    <motion.button
                       key={val}
+                      whileTap={{ scale: 0.96 }}
                       className={`group rounded-2xl border px-3 py-2 text-2xl transition ${valToTone(val).btnBg} ${valToTone(val).btnBorder} hover:shadow-md`}
                       onClick={() => setLevel(val)}
                       aria-label={`Set to ${labels[idx]}`}
                       title={`Set to ${labels[idx]}`}
                     >
-                      <span className="block group-active:scale-95">{faces[idx].emoji}</span>
+                      <span className="block">{faces[idx].emoji}</span>
                       <span className="block text-[10px] mt-1 text-gray-600 dark:text-gray-300">{labels[idx]}</span>
-                    </button>
+                    </motion.button>
                   ))}
                 </div>
               </div>
@@ -260,15 +355,81 @@ return (
 
               {/* Actions */}
               <div className="flex flex-wrap gap-3 pt-2">
-                <button className={`rounded-xl px-4 py-2 font-semibold border ${tone.btnBorder} ${tone.btnBg} ${tone.btnText} hover:shadow`} onClick={shareNative}>Share link</button>
-                <button className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow" onClick={() => handleCopy(shareUrl())}>Copy link</button>
-                <button className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow" onClick={() => handleCopy(messageTemplates.playful)}>Copy playful text</button>
-                <button className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow" onClick={() => handleCopy(messageTemplates.straight)}>Copy simple text</button>
-                <button className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow" onClick={() => handleCopy(messageTemplates.emoji)}>Copy emoji text</button>
-                <button className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow" onClick={handleReset}>Reset</button>
-                <button className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow" onClick={() => setLevel(Math.floor(Math.random() * 101))}>Randomize</button>
+                <button
+                  className={`rounded-xl px-4 py-2 font-semibold border ${tone.btnBorder} ${tone.btnBg} ${tone.btnText} hover:shadow`}
+                  onClick={shareNative}
+                >
+                  Share link
+                </button>
+
+                <button
+                  className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow"
+                  onClick={() => handleCopy(shareUrl())}
+                >
+                  Copy link
+                </button>
+
+                <button
+                  className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow"
+                  onClick={() => handleCopy(messageTemplates.playful)}
+                >
+                  Copy playful text
+                </button>
+
+                <button
+                  className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow"
+                  onClick={() => handleCopy(messageTemplates.straight)}
+                >
+                  Copy simple text
+                </button>
+
+                <button
+                  className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow"
+                  onClick={() => handleCopy(messageTemplates.emoji)}
+                >
+                  Copy emoji text
+                </button>
+
+                {/* Text Marcus (auto-picks template by level) */}
+                <a
+                  className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow"
+                  href={smsHref}
+                >
+                  Text Marcus
+                </a>
+
+                <button
+                  className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow"
+                  onClick={handleReset}
+                >
+                  Reset
+                </button>
+
+                <button
+                  className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow"
+                  onClick={clearAll}
+                >
+                  Reset saved settings
+                </button>
+
                 {copied && <span className="text-sm text-gray-600 dark:text-gray-300 self-center">{copied}</span>}
               </div>
+
+              {/* Install banner */}
+              {!installed && installPrompt && (
+                <div className="rounded-xl p-4 border border-black/10 dark:border-white/15 bg-white/80 dark:bg-zinc-900/70 flex items-center justify-between gap-3">
+                  <div className="text-sm">
+                    <div className="font-semibold">Install Grump Factor</div>
+                    <div className="text-gray-600 dark:text-gray-300">One-tap from your home screen. Works offline.</div>
+                  </div>
+                  <button
+                    className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow"
+                    onClick={triggerInstall}
+                  >
+                    Install
+                  </button>
+                </div>
+              )}
 
               {/* Live region for SR users */}
               <div aria-live="polite" className="sr-only">{announce}</div>
@@ -424,4 +585,4 @@ function buildMessages({ level, cups, name, url }: { level: number; cups: number
     straight: `Hey ${who}, where’s your grump factor today (0–100)? Slide and tell me: ${url}`,
     emoji: `Grump factor today? 👉 😄–🙂–😐–😠–😡  Slide: ${url}`,
   } as const
-                }
+}
