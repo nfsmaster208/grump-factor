@@ -76,15 +76,19 @@ export default function App() {
   }
 
   const shareUrl = () => {
-    try {
-      const url = new URL(window.location.href)
-      url.searchParams.set('level', String(Math.round(level)))
-      url.searchParams.set('cups', String(cups))
-      url.searchParams.set('name', name || 'Dad')
-      return url.toString()
-    } catch {
-      return ''
-    }
+  try {
+    const url = new URL(window.location.href)
+    url.searchParams.set('level', String(Math.round(level)))
+    url.searchParams.set('cups', String(cups))
+    url.searchParams.set('name', name || 'Dad')
+
+    const v = (import.meta as any).env?.VITE_APP_VERSION
+    if (v) url.searchParams.set('v', String(v))
+
+    return url.toString()
+  } catch {
+    return ''
+  }
   }
 
   const shareNative = async () => {
