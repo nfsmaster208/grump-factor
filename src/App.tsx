@@ -11,9 +11,20 @@ export default function App() {
   const [cups, setCups] = useStickyState<number>(1, 'gf_cups') // 0–4+
   const [name, setName] = useStickyState<string>('Dad', 'gf_name')
   const [dark, setDark] = useStickyState<boolean>(false, 'gf_dark')
-  const [copied, setCopied] = useState<string | null>(null)
   const [announce, setAnnounce] = useState('')
   const sliderRef = useRef<HTMLInputElement | null>(null)
+
+  // Toast
+  const [toast, setToast] = useState<string | null>(null)
+  const toastTimer = useRef<number | null>(null)
+  function showToast(msg: string, ms = 1400) {
+    setToast(msg)
+    if (toastTimer.current) window.clearTimeout(toastTimer.current)
+    toastTimer.current = window.setTimeout(() => setToast(null), ms)
+  }
+  useEffect(() => {
+    return () => { if (toastTimer.current) window.clearTimeout(toastTimer.current) }
+  }, [])
 
   // PWA install state
   const [installPrompt, setInstallPrompt] = useState<any>(null)
@@ -25,10 +36,7 @@ export default function App() {
 
   // Capture install prompt
   useEffect(() => {
-    const onBeforeInstall = (e: any) => {
-      e.preventDefault()
-      setInstallPrompt(e)
-    }
+    const onBeforeInstall = (e: any) => { e.preventDefault(); setInstallPrompt(e) }
     const onInstalled = () => setInstalled(true)
     window.addEventListener('beforeinstallprompt', onBeforeInstall)
     window.addEventListener('appinstalled', onInstalled)
@@ -102,14 +110,8 @@ export default function App() {
 
   // SHARE + COPY
   const handleCopy = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied('Copied!')
-      setTimeout(() => setCopied(null), 1200)
-    } catch {
-      setCopied('Couldn’t copy')
-      setTimeout(() => setCopied(null), 1500)
-    }
+    try { await navigator.clipboard.writeText(text); showToast('Link copied') }
+    catch { showToast('Couldn’t copy', 1800) }
   }
 
   const shareUrl = () => {
@@ -121,30 +123,30 @@ export default function App() {
       const v = (import.meta as any).env?.VITE_APP_VERSION
       if (v) url.searchParams.set('v', String(v))
       return url.toString()
-    } catch {
-      return ''
-    }
+    } catch { return '' }
   }
 
   const shareNative = async () => {
     const url = shareUrl()
     const title = 'Grump Factor'
     const text = `Where’s your grump factor today, ${name || 'Dad'}? Slide to rate: ${url}`
+
     // @ts-ignore - Web Share API
     if (navigator.share) {
+      showToast('Sharing…', 1200)
       try {
         // @ts-ignore
         await navigator.share({ title, text, url })
-      } catch {}
+        showToast('Shared')
+      } catch {
+        // user canceled or error; keep it quiet
+      }
     } else {
-      handleCopy(url)
+      await handleCopy(url) // shows "Link copied"
     }
   }
 
-  const handleReset = () => {
-    setLevel(35)
-    setCups(1)
-  }
+  const handleReset = () => { setLevel(35); setCups(1) }
 
   const clearAll = () => {
     try {
@@ -154,11 +156,11 @@ export default function App() {
       localStorage.removeItem('gf_dark')
     } catch {}
     setLevel(35); setCups(1); setName('Dad'); setDark(false)
-    setCopied('Reset saved settings'); setTimeout(() => setCopied(null), 1200)
+    showToast('Reset saved settings')
   }
 
   const marks = [0, 20, 40, 60, 80, 100]
-  const quickSet = [10, 30, 50, 70, 90] // midpoint for each face
+  const quickSet = [10, 30, 50, 70, 90]
 
   const messageTemplates = useMemo(
     () => buildMessages({ level, cups, name, url: shareUrl() }),
@@ -179,7 +181,7 @@ export default function App() {
 
   // Slider bubble position
   const pct = Math.max(0, Math.min(100, level))
-  const bubbleLeft = `calc(${pct}% - 16px)` // ~center a ~32px bubble
+  const bubbleLeft = `calc(${pct}% - 16px)`
 
   return (
     <div className={dark ? 'dark' : ''}>
@@ -411,8 +413,6 @@ export default function App() {
                 >
                   Reset saved settings
                 </button>
-
-                {copied && <span className="text-sm text-gray-600 dark:text-gray-300 self-center">{copied}</span>}
               </div>
 
               {/* Install banner */}
@@ -430,6 +430,24 @@ export default function App() {
                   </button>
                 </div>
               )}
+
+              {/* Toast */}
+              <AnimatePresence>
+                {toast && (
+                  <motion.div
+                    initial={{ y: 20, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    exit={{ y: 10, opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="fixed inset-x-0 bottom-6 flex justify-center pointer-events-none"
+                    aria-live="polite"
+                  >
+                    <div className="pointer-events-auto rounded-full border border-black/10 dark:border-white/15 bg-white/90 dark:bg-zinc-800/90 px-4 py-2 text-sm font-medium shadow">
+                      {toast}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
               {/* Live region for SR users */}
               <div aria-live="polite" className="sr-only">{announce}</div>
