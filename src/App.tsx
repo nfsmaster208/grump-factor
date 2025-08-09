@@ -168,16 +168,20 @@ export default function App() {
   )
 
   // Auto-pick SMS tone by current level
-  const smsTemplate = useMemo(() => {
-    if (level <= 40) return messageTemplates.playful
-    if (level <= 80) return messageTemplates.straight
-    return messageTemplates.emoji
-  }, [level, messageTemplates])
+  // Auto-pick SMS tone by current level (unchanged)
+const smsTemplate = useMemo(() => {
+  if (level <= 40) return messageTemplates.playful
+  if (level <= 80) return messageTemplates.straight
+  return messageTemplates.emoji
+}, [level, messageTemplates])
 
-  const smsHref = useMemo(() => {
-    const base = SMS_TO ? `sms:${encodeURIComponent(SMS_TO)}` : 'sms:'
-    return `${base}&body=${encodeURIComponent(smsTemplate)}`
-  }, [smsTemplate, SMS_TO])
+// Build a robust sms: URL. Always use ?body= (not &body=).
+const smsHref = useMemo(() => {
+  const recipient = SMS_TO ? encodeURIComponent(SMS_TO) : ''
+  // Works on Android and iOS; if some Android builds ignore body with no recipient,
+  // he can still use Share or Copy Simple Text.
+  return `sms:${recipient}?body=${encodeURIComponent(smsTemplate)}`
+}, [smsTemplate, SMS_TO])
 
   // Slider bubble position
   const pct = Math.max(0, Math.min(100, level))
@@ -206,6 +210,11 @@ export default function App() {
 
                 {/* Bouncy "Now:" pill */}
                 <motion.span
+                  {installed && (
+  <span className="inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-semibold border border-emerald-300/60 bg-emerald-100/70 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200 dark:border-emerald-700/60">
+    Installed
+  </span>
+)}
                   layout
                   key={Math.round(level)}
                   className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${tone.pillBg} ${tone.pillText} border ${tone.pillBorder}`}
