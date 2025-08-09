@@ -22,9 +22,7 @@ export default function App() {
     if (toastTimer.current) window.clearTimeout(toastTimer.current)
     toastTimer.current = window.setTimeout(() => setToast(null), ms)
   }
-  useEffect(() => {
-    return () => { if (toastTimer.current) window.clearTimeout(toastTimer.current) }
-  }, [])
+  useEffect(() => () => { if (toastTimer.current) window.clearTimeout(toastTimer.current) }, [])
 
   // PWA install state
   const [installPrompt, setInstallPrompt] = useState<any>(null)
@@ -33,8 +31,6 @@ export default function App() {
       (window.matchMedia?.('(display-mode: standalone)').matches ||
         (navigator as any).standalone === true)
   )
-
-  // Capture install prompt
   useEffect(() => {
     const onBeforeInstall = (e: any) => { e.preventDefault(); setInstallPrompt(e) }
     const onInstalled = () => setInstalled(true)
@@ -45,7 +41,6 @@ export default function App() {
       window.removeEventListener('appinstalled', onInstalled)
     }
   }, [])
-
   const triggerInstall = async () => {
     try {
       await installPrompt?.prompt()
@@ -139,10 +134,10 @@ export default function App() {
         await navigator.share({ title, text, url })
         showToast('Shared')
       } catch {
-        // user canceled or error; keep it quiet
+        // user canceled or error; no toast
       }
     } else {
-      await handleCopy(url) // shows "Link copied"
+      await handleCopy(url) // fallback
     }
   }
 
@@ -168,20 +163,22 @@ export default function App() {
   )
 
   // Auto-pick SMS tone by current level
-  // Auto-pick SMS tone by current level (unchanged)
-const smsTemplate = useMemo(() => {
-  if (level <= 40) return messageTemplates.playful
-  if (level <= 80) return messageTemplates.straight
-  return messageTemplates.emoji
-}, [level, messageTemplates])
+  const smsTemplate = useMemo(() => {
+    if (level <= 40) return messageTemplates.playful
+    if (level <= 80) return messageTemplates.straight
+    return messageTemplates.emoji
+  }, [level, messageTemplates])
 
-// Build a robust sms: URL. Always use ?body= (not &body=).
-const smsHref = useMemo(() => {
-  const recipient = SMS_TO ? encodeURIComponent(SMS_TO) : ''
-  // Works on Android and iOS; if some Android builds ignore body with no recipient,
-  // he can still use Share or Copy Simple Text.
-  return `sms:${recipient}?body=${encodeURIComponent(smsTemplate)}`
-}, [smsTemplate, SMS_TO])
+  // Robust “Text Marcus” handler
+  const textMarcus = async () => {
+    const recipient = SMS_TO ? encodeURIComponent(SMS_TO) : ''
+    const smsUrl = `sms:${recipient}?body=${encodeURIComponent(smsTemplate)}`
+    if (!SMS_TO && (navigator as any).share) {
+      try { await (navigator as any).share({ text: smsTemplate }); showToast('Shared'); return }
+      catch { /* user cancelled; fall through to SMS */ }
+    }
+    window.location.href = smsUrl
+  }
 
   // Slider bubble position
   const pct = Math.max(0, Math.min(100, level))
@@ -199,6 +196,7 @@ const smsHref = useMemo(() => {
                   Rate the current <span className="font-semibold">Grump Factor</span> from sunshine to thunderclouds ☁️⚡
                 </p>
               </div>
+
               <div className="flex items-center gap-2">
                 <button
                   className="rounded-full px-3 py-1 text-xs font-semibold border dark:border-white/20 bg-white/70 dark:bg-zinc-800"
@@ -210,11 +208,6 @@ const smsHref = useMemo(() => {
 
                 {/* Bouncy "Now:" pill */}
                 <motion.span
-                  {installed && (
-  <span className="inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-semibold border border-emerald-300/60 bg-emerald-100/70 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200 dark:border-emerald-700/60">
-    Installed
-  </span>
-)}
                   layout
                   key={Math.round(level)}
                   className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${tone.pillBg} ${tone.pillText} border ${tone.pillBorder}`}
@@ -223,6 +216,13 @@ const smsHref = useMemo(() => {
                 >
                   Now: {Math.round(level)}/100
                 </motion.span>
+
+                {/* Installed badge */}
+                {installed && (
+                  <span className="inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-semibold border border-emerald-300/60 bg-emerald-100/70 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200 dark:border-emerald-700/60">
+                    Installed
+                  </span>
+                )}
               </div>
             </header>
 
@@ -246,6 +246,210 @@ const smsHref = useMemo(() => {
                         key={i}
                         onClick={() => setCups(i)}
                         className={`text-2xl leading-none rounded-xl px-2 py-1 border ${i <= cups ? 'bg-amber-50 dark:bg-amber-900/30 border-amber-300 dark:border-amber-600' : 'bg-transparent border-transparent'}`}
+                        aria-label={`${i} cup${i === 1 ? '' : 's'} of coffee`}
+                        title={`${i} cup${i === 1 ? '' : 's'} of coffee`}
+                      >
+                        {i <= cups ? '☕' : '🫖'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Big face + animated descriptor */}
+              <div className="flex items-center gap-4">
+                <AnimatePresence mode="popLayout" initial={false}>
+                  <motion.div
+                    key={face.emoji}
+                    className="text-[64px] md:text-[80px] leading-none select-none"
+                    aria-hidden
+                    initial={{ scale: 0.9, rotate: -5, opacity: 0 }}
+                    animate={{ scale: 1, rotate: 0, opacity: 1 }}
+                    exit={{ scale: 0.9, rotate: 5, opacity: 0 }}
+                    transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                  >
+                    {face.emoji}
+                  </motion.div>
+                </AnimatePresence>
+
+                <AnimatePresence mode="popLayout" initial={false}>
+                  <motion.div
+                    key={descriptor.title}
+                    initial={{ y: 6, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    exit={{ y: -6, opacity: 0 }}
+                    transition={{ type: 'spring', stiffness: 400, damping: 28, mass: 0.6 }}
+                  >
+                    <div className={`text-xl md:text-2xl font-bold ${tone.text}`}>{descriptor.title}</div>
+                    <div className="text-gray-600 dark:text-gray-300 text-sm md:text-base">{descriptor.subtitle}</div>
+                  </motion.div>
+                </AnimatePresence>
+              </div>
+
+              {/* Slider + floating bubble */}
+              <div className="pt-2">
+                <div className="relative h-0">
+                  <motion.div
+                    className="absolute -top-7 w-10 text-center text-xs font-semibold pointer-events-none select-none"
+                    style={{ left: bubbleLeft }}
+                    animate={{ y: [0, -2, 0] }}
+                    transition={{ duration: 0.35 }}
+                  >
+                    <span className="inline-block px-2 py-1 rounded-lg bg-white/90 dark:bg-zinc-800/90 border border-black/10 dark:border-white/10">
+                      {Math.round(level)}
+                    </span>
+                  </motion.div>
+                </div>
+
+                <label htmlFor="grump-slider" className="sr-only">Grump Factor</label>
+                <input
+                  id="grump-slider"
+                  ref={sliderRef}
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={level}
+                  onChange={(e) => setLevel(Number(e.target.value))}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={level}
+                  aria-valuetext={`${Math.round(level)} out of 100`}
+                  className="w-full appearance-none h-3 rounded-full outline-none"
+                  style={{ background: `linear-gradient(to right, ${tone.track} ${level}%, ${dark ? '#27272a' : '#e5e7eb'} ${level}%)` }}
+                />
+                <style>{`
+                  #grump-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 28px; height: 28px; border-radius: 9999px; background: white; border: 3px solid ${tone.thumbBorder}; box-shadow: 0 2px 8px rgba(0,0,0,.25); cursor: grab; }
+                  #grump-slider:active::-webkit-slider-thumb { cursor: grabbing; }
+                  #grump-slider::-moz-range-thumb { width: 28px; height: 28px; border-radius: 9999px; background: white; border: 3px solid ${tone.thumbBorder}; box-shadow: 0 2px 8px rgba(0,0,0,.25); cursor: grab; }
+                `}</style>
+
+                {/* Tick marks */}
+                <div className="relative mt-3 h-5">
+                  <div className="absolute inset-x-0 top-2 flex justify-between">
+                    {marks.map((m) => (
+                      <div key={m} className={`h-3 w-[2px] ${dark ? 'bg-zinc-600' : 'bg-gray-300'}`} />
+                    ))}
+                  </div>
+                  <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
+                    <span>0</span><span>20</span><span>40</span><span>60</span><span>80</span><span>100</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Quick faces */}
+              <div>
+                <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-2">Quick set</p>
+                <div className="grid grid-cols-5 gap-2">
+                  {quickSet.map((val, idx) => (
+                    <motion.button
+                      key={val}
+                      whileTap={{ scale: 0.96 }}
+                      className={`group rounded-2xl border px-3 py-2 text-2xl transition ${valToTone(val).btnBg} ${valToTone(val).btnBorder} hover:shadow-md`}
+                      onClick={() => setLevel(val)}
+                      aria-label={`Set to ${labels[idx]}`}
+                      title={`Set to ${labels[idx]}`}
+                    >
+                      <span className="block">{faces[idx].emoji}</span>
+                      <span className="block text-[10px] mt-1 text-gray-600 dark:text-gray-300">{labels[idx]}</span>
+                    </motion.button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Recommendation */}
+              <div className={`rounded-xl p-4 border ${dark ? 'border-white/15 bg-zinc-900/60' : 'border-black/10 bg-white/70'}`}>
+                <div className="text-sm font-semibold mb-1">Suggested approach</div>
+                <div className="text-sm text-gray-700 dark:text-gray-300">{recommendation}</div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex flex-wrap gap-3 pt-2">
+                <button
+                  className={`rounded-xl px-4 py-2 font-semibold border ${tone.btnBorder} ${tone.btnBg} ${tone.btnText} hover:shadow`}
+                  onClick={shareNative}
+                >
+                  Share link
+                </button>
+
+                <button
+                  className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow"
+                  onClick={() => handleCopy(shareUrl())}
+                >
+                  Copy link
+                </button>
+
+                <button
+                  className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow"
+                  onClick={() => handleCopy(messageTemplates.playful)}
+                >
+                  Copy playful text
+                </button>
+
+                <button
+                  className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow"
+                  onClick={() => handleCopy(messageTemplates.straight)}
+                >
+                  Copy simple text
+                </button>
+
+                <button
+                  className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow"
+                  onClick={() => handleCopy(messageTemplates.emoji)}
+                >
+                  Copy emoji text
+                </button>
+
+                {/* Text Marcus */}
+                <button
+                  className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow"
+                  onClick={textMarcus}
+                >
+                  Text Marcus
+                </button>
+
+                <button
+                  className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow"
+                  onClick={handleReset}
+                >
+                  Reset
+                </button>
+
+                <button
+                  className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow"
+                  onClick={clearAll}
+                >
+                  Reset saved settings
+                </button>
+              </div>
+
+              {/* Install banner */}
+              {!installed && installPrompt && (
+                <div className="rounded-xl p-4 border border-black/10 dark:border-white/15 bg-white/80 dark:bg-zinc-900/70 flex items-center justify-between gap-3">
+                  <div className="text-sm">
+                    <div className="font-semibold">Install Grump Factor</div>
+                    <div className="text-gray-600 dark:text-gray-300">One-tap from your home screen. Works offline.</div>
+                  </div>
+                  <button
+                    className="rounded-xl px-4 py-2 font-semibold border border-gray-300 dark:border-white/20 bg-white dark:bg-zinc-800 hover:shadow"
+                    onClick={triggerInstall}
+                  >
+                    Install
+                  </button>
+                </div>
+              )}
+
+              {/* Toast */}
+              <AnimatePresence>
+                {toast && (
+                  <motion.div
+                    initial={{ y: 20, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    exit={{ y: 10, opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="fixed inset-x-0 bottom-6 flex justify-center pointer-events-none"
+                    aria-live="polite"
+     nsparent border-transparent'}`}
                         aria-label={`${i} cup${i === 1 ? '' : 's'} of coffee`}
                         title={`${i} cup${i === 1 ? '' : 's'} of coffee`}
                       >
